@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard Monitoring Beban Trafo 20kV - ULP LABUAN</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f1923; color: #e0e0e0; min-height: 100vh; }
+.header { background: linear-gradient(135deg, #1a2a3a, #0d1b2a); padding: 16px 24px; border-bottom: 2px solid #1e88e5; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+.header h1 { font-size: clamp(16px, 2.5vw, 22px); color: #64b5f6; }
+.header .subtitle { font-size: 11px; color: #78909c; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; padding: 16px 24px; }
+.card { background: #1a2a3a; border-radius: 10px; padding: 16px; border-left: 4px solid #1e88e5; }
+.card.critical { border-left-color: #ef5350; }
+.card.warning { border-left-color: #ff9800; }
+.card.success { border-left-color: #4caf50; }
+.card.info { border-left-color: #2196f3; }
+.card .label { font-size: 11px; color: #78909c; text-transform: uppercase; letter-spacing: 1px; }
+.card .value { font-size: clamp(22px, 3vw, 32px); font-weight: bold; color: #fff; margin-top: 4px; }
+.card .pct { font-size: 11px; color: #78909c; margin-top: 2px; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 16px; padding: 0 24px 16px; }
+.chart-box { background: #1a2a3a; border-radius: 10px; padding: 16px; }
+.chart-box h3 { font-size: 13px; color: #64b5f6; margin-bottom: 12px; }
+.chart-box canvas { max-height: 280px; }
+.filters { padding: 8px 24px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.filters input, .filters select { background: #1a2a3a; border: 1px solid #37474f; color: #e0e0e0; padding: 8px 12px; border-radius: 6px; font-size: 12px; }
+.filters input { width: 200px; }
+.filters select { width: 150px; }
+.table-wrap { padding: 0 24px 24px; overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th { background: #1e88e5; color: #fff; padding: 10px 8px; text-align: center; position: sticky; top: 0; cursor: pointer; user-select: none; }
+th:hover { background: #1565c0; }
+td { padding: 8px; text-align: center; border-bottom: 1px solid #263238; }
+tr:hover { background: rgba(30,136,229,0.1); }
+tr.overload { background: rgba(239,83,80,0.15); }
+tr.overload:hover { background: rgba(239,83,80,0.25); }
+tr.anomali { border-left: 3px solid #ff9800; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: bold; }
+.badge-overload { background: #ef5350; color: #fff; }
+.badge-underload { background: #78909c; color: #fff; }
+.badge-normal { background: #4caf50; color: #fff; }
+.badge-balance { background: #2196f3; color: #fff; }
+.badge-unbalance { background: #ff9800; color: #fff; }
+.clickable { cursor: pointer; color: #64b5f6; text-decoration: underline; }
+.modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; overflow-y: auto; }
+.modal-content { background: #1a2a3a; margin: 40px auto; padding: 24px; border-radius: 12px; max-width: 700px; border: 1px solid #37474f; }
+.modal h3 { color: #64b5f6; margin-bottom: 16px; }
+.modal table { font-size: 11px; }
+.modal .close { float: right; color: #78909c; font-size: 24px; cursor: pointer; }
+.modal .close:hover { color: #fff; }
+.loading { text-align: center; padding: 60px; color: #78909c; font-size: 16px; }
+.footer { text-align: center; padding: 8px; color: #546e7a; font-size: 10px; border-top: 1px solid #263238; margin: 0 24px; }
+</style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <h1>⚡ Dashboard Monitoring Beban Trafo 20kV</h1>
+    <div class="subtitle">ULP LABUAN, UP3 Banten Selatan</div>
+  </div>
+  <div class="subtitle" id="lastUpdate">Memuat data...</div>
+</div>
+
+<div id="loading" class="loading">⏳ Memuat data pengukuran_beban.csv...</div>
+<div id="content" style="display:none">
+
+<div class="cards" id="cards"></div>
+
+<div class="charts">
+  <div class="chart-box"><h3>📊 Distribusi Status Beban</h3><canvas id="chartStatus"></canvas></div>
+  <div class="chart-box"><h3>📊 Top 10 Penyulang - Gardu Overload</h3><canvas id="chartPenyulang"></canvas></div>
+  <div class="chart-box"><h3>📊 Top 10 Gardu Overload Tertinggi</h3><canvas id="chartTop"></canvas></div>
+</div>
+
+<div class="filters">
+  <input type="text" id="search" placeholder="🔍 Cari gardu..." oninput="renderTable()">
+  <select id="filterStatus" onchange="renderTable()">
+    <option value="">Semua Status</option>
+    <option value="Overload">Overload</option>
+    <option value="Normal">Normal</option>
+    <option value="Underload">Underload</option>
+  </select>
+  <select id="filterBalance" onchange="renderTable()">
+    <option value="">Semua Keseimbangan</option>
+    <option value="Tidak Seimbang">Tidak Seimbang</option>
+    <option value="Kurang Seimbang">Kurang Seimbang</option>
+    <option value="Seimbang">Seimbang</option>
+  </select>
+  <select id="filterPenyulang" onchange="renderTable()">
+    <option value="">Semua Penyulang</option>
+  </select>
+  <label style="font-size:12px;margin-left:8px;">
+    <input type="checkbox" id="filterAnomali" onchange="renderTable()"> Hanya Anomali
+  </label>
+  <span style="margin-left:auto;font-size:12px;color:#78909c;" id="resultCount"></span>
+</div>
+
+<div class="table-wrap">
+  <table id="dataTable">
+    <thead>
+      <tr>
+        <th onclick="sortTable('GARDU')">GARDU ↕</th>
+        <th onclick="sortTable('PENYULANG')">PENYULANG ↕</th>
+        <th onclick="sortTable('KAPASITAS')">KAP ↕</th>
+        <th onclick="sortTable('max_beban')">BEBAN MAX ↕</th>
+        <th onclick="sortTable('avg_beban')">RATA2 ↕</th>
+        <th onclick="sortTable('max_unbalance')">UNBALANCE ↕</th>
+        <th>FASA R/S/T</th>
+        <th>STATUS</th>
+        <th>KESEIMBANGAN</th>
+        <th>N UKUR</th>
+        <th>DETAIL</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<div class="footer">Dashboard Monitoring Beban Trafo &copy; 2026 ULP LABUAN | Data: pengukuran_beban.csv (client-side)</div>
+</div>
+
+<div class="modal" id="detailModal">
+  <div class="modal-content">
+    <span class="close" onclick="document.getElementById('detailModal').style.display='none'">&times;</span>
+    <h3 id="modalTitle"></h3>
+    <div id="modalBody"></div>
+  </div>
+</div>
+
+<script>
+let rawRows = [];      // semua baris pengukuran
+let allData = [];      // agregat per gardu
+let filteredData = [];
+let sortCol = 'max_beban';
+let sortDir = -1;
+const num = v => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+const mode = arr => { const c = {}; let best = arr[0], bc = 0; arr.forEach(x => { c[x]=(c[x]||0)+1; if(c[x]>bc){bc=c[x];best=x;} }); return best; };
+
+// Baca CSV client-side (rung 4: browser sendiri jadi "backend")
+Papa.parse('pengukuran_beban.csv', {
+  download: true, header: true, skipEmptyLines: true,
+  complete: res => { rawRows = res.data.filter(r => r.GARDU); aggregate(); init(); },
+  error: err => { document.getElementById('loading').innerHTML = '❌ Gagal memuat CSV: ' + err.message; }
+});
+
+function aggregate() {
+  const groups = {};
+  rawRows.forEach(r => {
+    const key = r.GARDU;
+    if (!groups[key]) groups[key] = { rows: [], GARDU: r.GARDU, UNIT_LAYANAN: r.UNIT_LAYANAN, PENYULANG: r.PENYULANG, KAPASITAS: num(r.KAPASITAS) };
+    groups[key].rows.push(r);
+  });
+  allData = Object.values(groups).map(g => {
+    const beban = g.rows.map(r => num(r.persen_daya_trafo));
+    const arus = g.rows.map(r => num(r.arus_rata2));
+    const maxBeban = Math.max(...beban), minBeban = Math.min(...beban);
+    const hasZero = arus.some(a => a === 0), hasNonzero = arus.some(a => a > 0);
+    const isAnomali = (hasZero && hasNonzero) || (maxBeban - minBeban > 50) || maxBeban > 150;
+    return {
+      GARDU: g.GARDU, UNIT_LAYANAN: g.UNIT_LAYANAN, PENYULANG: g.PENYULANG, KAPASITAS: g.KAPASITAS,
+      max_beban: maxBeban,
+      avg_beban: beban.reduce((a,b)=>a+b,0)/beban.length,
+      max_unbalance: Math.max(...g.rows.map(r => num(r.unbalance_percent))),
+      max_r: Math.max(...g.rows.map(r => num(r.beban_r))),
+      max_s: Math.max(...g.rows.map(r => num(r.beban_s))),
+      max_t: Math.max(...g.rows.map(r => num(r.beban_t))),
+      n_ukur: g.rows.length,
+      status: mode(g.rows.map(r => (r.status_beban_trafo||'').trim())),
+      kondisi: mode(g.rows.map(r => (r.kondisi_fasa_max||'').trim())),
+      is_anomali: isAnomali,
+      _rows: g.rows
+    };
+  });
+}
+
+function init() {
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('content').style.display = 'block';
+  filteredData = [...allData];
+  renderCards(); renderCharts(); populateFilters(); renderTable();
+  document.getElementById('lastUpdate').textContent = 'Data: ' + allData.length + ' gardu | ' + new Date().toLocaleDateString('id-ID');
+}
+
+function renderCards() {
+  const total = allData.length;
+  const overload = allData.filter(d => d.status === 'Overload').length;
+  const underload = allData.filter(d => d.status === 'Underload' && d.max_beban < 20).length;
+  const unbalance = allData.filter(d => d.max_unbalance > 25).length;
+  const anomali = allData.filter(d => d.is_anomali).length;
+  document.getElementById('cards').innerHTML = `
+    <div class="card info"><div class="label">Total Gardu</div><div class="value">${total}</div><div class="pct">10 Penyulang</div></div>
+    <div class="card critical"><div class="label">Overload</div><div class="value">${overload}</div><div class="pct">${(overload/total*100).toFixed(1)}%</div></div>
+    <div class="card warning"><div class="label">Underload &lt;20%</div><div class="value">${underload}</div><div class="pct">${(underload/total*100).toFixed(1)}%</div></div>
+    <div class="card warning"><div class="label">Tidak Seimbang</div><div class="value">${unbalance}</div><div class="pct">${(unbalance/total*100).toFixed(1)}%</div></div>
+    <div class="card critical"><div class="label">⚠ Anomali</div><div class="value">${anomali}</div><div class="pct">${(anomali/total*100).toFixed(1)}%</div></div>`;
+}
+
+function renderCharts() {
+  const sc = {Overload:0, Normal:0, Underload:0};
+  allData.forEach(d => { if (sc[d.status] !== undefined) sc[d.status]++; });
+  new Chart(document.getElementById('chartStatus'), {
+    type: 'doughnut',
+    data: { labels: ['Overload','Normal','Underload'], datasets: [{ data: [sc.Overload,sc.Normal,sc.Underload], backgroundColor: ['#ef5350','#4caf50','#78909c'], borderColor: '#0f1923', borderWidth: 2 }] },
+    options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { color: '#b0bec5', font: {size:11} } } } }
+  });
+  const pm = {};
+  allData.forEach(d => { if(!pm[d.PENYULANG]) pm[d.PENYULANG]={total:0,overload:0}; pm[d.PENYULANG].total++; if(d.status==='Overload') pm[d.PENYULANG].overload++; });
+  const sp = Object.entries(pm).sort((a,b)=>b[1].overload-a[1].overload).slice(0,10);
+  new Chart(document.getElementById('chartPenyulang'), {
+    type: 'bar',
+    data: { labels: sp.map(p=>p[0]), datasets: [{ label:'Overload', data: sp.map(p=>p[1].overload), backgroundColor:'#ef5350', borderRadius:4 }, { label:'Total', data: sp.map(p=>p[1].total), backgroundColor:'#37474f', borderRadius:4 }] },
+    options: { indexAxis:'y', responsive:true, scales:{ x:{ticks:{color:'#78909c'},grid:{color:'#263238'}}, y:{ticks:{color:'#b0bec5',font:{size:10}},grid:{display:false}} }, plugins:{ legend:{labels:{color:'#b0bec5',font:{size:10}}} } }
+  });
+  const t10 = allData.filter(d=>d.status==='Overload').sort((a,b)=>b.max_beban-a.max_beban).slice(0,10);
+  new Chart(document.getElementById('chartTop'), {
+    type: 'bar',
+    data: { labels: t10.map(d=>d.GARDU), datasets: [{ label:'Beban Max %', data: t10.map(d=>d.max_beban), backgroundColor: t10.map(d=>d.max_beban>130?'#b71c1c':d.max_beban>100?'#ef5350':'#ff9800'), borderRadius:6 }] },
+    options: { responsive:true, scales:{ y:{beginAtZero:true,ticks:{color:'#78909c',callback:v=>v+'%'},grid:{color:'#263238'}}, x:{ticks:{color:'#b0bec5',font:{size:10}},grid:{display:false}} }, plugins:{legend:{display:false}} }
+  });
+}
+
+function populateFilters() {
+  const ps = [...new Set(allData.map(d=>d.PENYULANG))].sort();
+  const sel = document.getElementById('filterPenyulang');
+  ps.forEach(p => { const o=document.createElement('option'); o.value=p; o.textContent=p; sel.appendChild(o); });
+}
+
+function applyFilters() {
+  let data = [...allData];
+  const search = document.getElementById('search').value.toLowerCase();
+  const status = document.getElementById('filterStatus').value;
+  const balance = document.getElementById('filterBalance').value;
+  const penyulang = document.getElementById('filterPenyulang').value;
+  const anomali = document.getElementById('filterAnomali').checked;
+  if (search) data = data.filter(d => d.GARDU.toLowerCase().includes(search) || d.PENYULANG.toLowerCase().includes(search));
+  if (status) data = data.filter(d => d.status === status);
+  if (balance) data = data.filter(d => d.kondisi === balance);
+  if (penyulang) data = data.filter(d => d.PENYULANG === penyulang);
+  if (anomali) data = data.filter(d => d.is_anomali);
+  data.sort((a,b) => {
+    let va = a[sortCol], vb = b[sortCol];
+    if (typeof va === 'string') return sortDir * va.toLowerCase().localeCompare(vb.toLowerCase());
+    return sortDir * (va - vb);
+  });
+  return data;
+}
+
+function renderTable() {
+  filteredData = applyFilters();
+  document.getElementById('resultCount').textContent = filteredData.length + ' gardu';
+  document.querySelector('#dataTable tbody').innerHTML = filteredData.map(d => {
+    const rc = (d.status==='Overload'?' overload':'') + (d.is_anomali?' anomali':'');
+    const sb = d.status==='Overload'?'badge-overload':d.status==='Underload'?'badge-underload':'badge-normal';
+    const bb = d.kondisi.includes('Tidak')?'badge-unbalance':d.kondisi.includes('Kurang')?'badge-balance':'badge-normal';
+    const af = d.is_anomali?' ⚠':'';
+    return `<tr class="${rc}">
+      <td>${d.GARDU}${af}</td><td>${d.PENYULANG}</td><td>${d.KAPASITAS} kVA</td>
+      <td style="font-weight:bold;color:${d.max_beban>100?'#ef5350':d.max_beban>80?'#ff9800':'#e0e0e0'}">${d.max_beban.toFixed(0)}%</td>
+      <td>${d.avg_beban.toFixed(0)}%</td>
+      <td style="color:${d.max_unbalance>25?'#ff9800':'#e0e0e0'}">${d.max_unbalance.toFixed(0)}%</td>
+      <td style="font-size:10px">R:${d.max_r.toFixed(0)} S:${d.max_s.toFixed(0)} T:${d.max_t.toFixed(0)}</td>
+      <td><span class="badge ${sb}">${d.status}</span></td>
+      <td><span class="badge ${bb}">${d.kondisi}</span></td>
+      <td>${d.n_ukur}x</td>
+      <td><span class="clickable" onclick="showDetail('${d.GARDU}')">📋</span></td>
+    </tr>`;
+  }).join('');
+}
+
+function sortTable(col) {
+  if (sortCol === col) sortDir *= -1; else { sortCol = col; sortDir = -1; }
+  renderTable();
+}
+
+function showDetail(gardu) {
+  const d = allData.find(x => x.GARDU === gardu);
+  if (!d) return;
+  const rows = [...d._rows].sort((a,b) => String(a.tanggal_ukur).localeCompare(String(b.tanggal_ukur)));
+  document.getElementById('modalTitle').textContent = '📋 Riwayat Pengukuran: ' + gardu + ' (' + d.PENYULANG + ', ' + d.KAPASITAS + ' kVA)';
+  let html = '<table><thead><tr><th>TANGGAL</th><th>WAKTU</th><th>R (A)</th><th>S (A)</th><th>T (A)</th><th>ARUS RATA</th><th>BEBAN %</th><th>UNBAL %</th><th>STATUS</th></tr></thead><tbody>';
+  const lastIdx = rows.length - 1;
+  rows.forEach((m, i) => {
+    const isLatest = (i === lastIdx);
+    const rowStyle = isLatest ? ' style="background:#2d1f00;border-left:3px solid #ff9800;font-weight:bold"' : (num(m.arus_rata2)===0 ? ' style="color:#ff9800"' : '');
+    html += `<tr${rowStyle}>
+      <td>${String(m.tanggal_ukur).slice(0,16)}</td><td>${m.waktu_ukur||''}</td>
+      <td>${num(m.beban_r).toFixed(0)}</td><td>${num(m.beban_s).toFixed(0)}</td><td>${num(m.beban_t).toFixed(0)}</td>
+      <td>${num(m.arus_rata2).toFixed(0)}</td><td>${num(m.persen_daya_trafo).toFixed(0)}%</td><td>${num(m.unbalance_percent).toFixed(0)}%</td>
+      <td>${(m.status_beban_trafo||'').trim()}${isLatest ? ' <span style="background:#ff9800;color:#000;padding:1px 6px;border-radius:10px;font-size:9px;font-weight:bold">TERBARU</span>' : ''}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  if (d.is_anomali) html += '<p style="color:#ff9800;margin-top:12px;">⚠ Gardu ini terdeteksi anomali pengukuran. Verifikasi data!</p>';
+  document.getElementById('modalBody').innerHTML = html;
+  document.getElementById('detailModal').style.display = 'block';
+}
+
+window.onclick = function(e) { if (e.target.className === 'modal') e.target.style.display = 'none'; }
+</script>
+</body>
+</html>
